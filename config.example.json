@@ -1,0 +1,8 @@
+{
+  "username": "your_instagram_username",
+  "output_root": "/absolute/path/to/archive",
+  "lists": null,
+  "max_posts_per_run": 200,
+  "inter_list_pause_seconds": 60,
+  "request_delay_range": [2, 6]
+}
