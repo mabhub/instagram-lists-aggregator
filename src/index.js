@@ -14,13 +14,16 @@ try { process.stderr._handle?.setBlocking?.(true); } catch { /* ignore */ }
 const HELP = `Usage: iga [options]
 
 Options:
-  --config <path>   Path to config.json (default: ./config.json)
-  --list <name>     Target a specific list (repeatable). Default: all lists.
-  -h, --help        Show help
+  --config <path>      Path to config.json (default: ./config.json)
+  --list <name>        Target a specific list (repeatable). Default: all lists.
+  --refresh-metadata   Force refresh of stats (likes/views/comments) on posts
+                       that are already fully archived. Without this flag,
+                       such posts are skipped without any API call.
+  -h, --help           Show help
 
 Environment:
-  IGA_PASSWORD      Instagram password (avoids interactive prompt).
-  IGA_2FA_CODE      Pre-supply 2FA code (otherwise prompted on stderr).
+  IGA_PASSWORD         Instagram password (avoids interactive prompt).
+  IGA_2FA_CODE         Pre-supply 2FA code (otherwise prompted on stderr).
 `;
 
 async function main() {
@@ -28,13 +31,17 @@ async function main() {
     options: {
       config: { type: 'string', default: 'config.json' },
       list: { type: 'string', multiple: true, default: [] },
+      'refresh-metadata': { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
 
   if (values.help) { console.log(HELP); return; }
 
-  const cfg = await loadConfig(values.config);
+  const cfg = {
+    ...(await loadConfig(values.config)),
+    forceRefresh: values['refresh-metadata'],
+  };
   const filterNames = values.list.length ? values.list : null;
 
   rootLogger.info(`Starting shim for @${cfg.username}...`);

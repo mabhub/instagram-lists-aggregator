@@ -21,9 +21,14 @@ node src/index.js
 node src/index.js --list "Voyages"
 node src/index.js --list "Voyages" --list "Recettes"
 
+# Rafraîchir les stats (likes/vues/commentaires) des posts déjà archivés
+node src/index.js --refresh-metadata
+
 # Sans prompt interactif
 IGA_PASSWORD='...' IGA_2FA_CODE='123456' node src/index.js
 ```
+
+Par défaut, un post dont le média et `metadata.json` sont déjà présents est sauté sans appel API — les re-runs sur une archive complète sont donc quasi-instantanés. Utiliser `--refresh-metadata` pour forcer un rafraîchissement des `stats` (snapshot de l'instant du dernier refresh).
 
 Au premier run, mot de passe demandé (masqué) et 2FA si activée. Session persistée dans `~/.cache/iga/`.
 

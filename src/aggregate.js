@@ -44,24 +44,21 @@ async function withRetry(fn, { logger, label, maxAttempts = 4 }) {
   throw lastErr;
 }
 
-export async function aggregateList(list, { outputRoot, maxPostsPerRun, requestDelayRange }) {
+export async function aggregateList(list, { outputRoot, maxPostsPerRun, requestDelayRange, forceRefresh = false }) {
   const nowIso = new Date().toISOString();
   const listDir = join(outputRoot, sanitizeDirName(list.name));
   const statePath = join(listDir, '.state.json');
   const logger = createLogger(listDir);
 
-  logger.info(`List "${list.name}": discovering shortcodes...`);
   const current = await listShortcodes(list.id);
 
   const prev = await loadState(statePath);
   const prevShortcodes = new Set(prev.shortcodes);
   const { added, existing, removed } = diffShortcodes(prev.shortcodes, current);
-  logger.info(`${list.name}: ${current.length} posts (diff +${added.length} ~${existing.length} -${removed.length})`);
+  logger.info(`${current.length} posts  (diff +${added.length} ~${existing.length} -${removed.length})`);
   const progress = createProgress(added.length + existing.length + removed.length, list.name);
 
-  // Persist state incrementally as a set of successfully-seen shortcodes.
-  // Starts from previous state; we add shortcodes as they are processed so that
-  // an interruption doesn't lose the progress already made this run.
+  // .state.json is rewritten after every post — cost is negligible (<50KB).
   const seen = new Set(prev.shortcodes);
 
   async function persist() {
@@ -99,21 +96,28 @@ export async function aggregateList(list, { outputRoot, maxPostsPerRun, requestD
     try {
       const previous = await readMetadata(metaPath);
       const hasMedia = await postHasMedia(postDir);
-      let meta;
-      let eventKind = 'existing';
-      if (!hasMedia) {
+
+      if (hasMedia && previous && !forceRefresh) {
+        // Fully archived already — no API call, no I/O, no inter-post delay.
+        seen.add(sc);
+        progress.tick('skipped', sc);
+      } else if (!hasMedia) {
         const fresh = await withRetry(() => fetchPost(sc, postDir, list.name),
           { logger, label: `refetch ${sc}` });
-        meta = mergeMetadata(previous, fresh, { nowIso });
+        const meta = mergeMetadata(previous, fresh, { nowIso });
+        await writeMetadata(metaPath, meta);
+        seen.add(sc);
+        progress.tick('refetched', sc);
+        await sleep(jitter(requestDelayRange));
       } else {
         const fresh = await withRetry(() => refreshMetadata(sc, list.name),
           { logger, label: `refresh ${sc}` });
-        meta = mergeMetadata(previous, fresh, { nowIso });
-        eventKind = 'skipped';
+        const meta = mergeMetadata(previous, fresh, { nowIso });
+        await writeMetadata(metaPath, meta);
+        seen.add(sc);
+        progress.tick('existing', sc);
+        await sleep(jitter(requestDelayRange));
       }
-      await writeMetadata(metaPath, meta);
-      seen.add(sc);
-      progress.tick(eventKind, sc);
     } catch (err) {
       if (err.fatal) throw err;
       if (prevShortcodes.has(sc)) seen.add(sc);
@@ -122,7 +126,6 @@ export async function aggregateList(list, { outputRoot, maxPostsPerRun, requestD
     }
     processed += 1;
     await persist();
-    await sleep(jitter(requestDelayRange));
   }
 
   for (const sc of removed) {
