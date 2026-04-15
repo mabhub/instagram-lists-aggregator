@@ -19,9 +19,11 @@ import os
 import random
 import re
 import shutil
+import signal
 import sys
 import tempfile
 import time
+from contextlib import contextmanager
 from pathlib import Path
 
 # third-party
@@ -56,9 +58,30 @@ _TRANSIENT_NET_ERRORS = (
 )
 
 
+@contextmanager
+def _hard_timeout(seconds: int, label: str):
+    """Raise TimeoutError if the wrapped block runs longer than `seconds`.
+
+    Uses SIGALRM (Unix only). The shim always runs on Linux in production,
+    so this is safe. Previous alarms are restored on exit.
+    """
+    def _handler(signum, frame):
+        raise TimeoutError(f"{label}: hard timeout after {seconds}s")
+    old_handler = signal.signal(signal.SIGALRM, _handler)
+    signal.alarm(seconds)
+    try:
+        yield
+    finally:
+        signal.alarm(0)
+        signal.signal(signal.SIGALRM, old_handler)
+
+
 def _with_net_retry(fn, *args, _label="call", **kwargs):
+    # 4 attempts total: 3 with exponential backoff, then a final attempt
+    # wrapped in a hard wall-clock timeout so a silent half-open socket
+    # can't hang the whole shim.
     backoff = [5, 15, 30]
-    for attempt, wait in enumerate(backoff, start=1):
+    for wait in backoff:
         try:
             return fn(*args, **kwargs)
         except _TRANSIENT_NET_ERRORS as e:
@@ -66,8 +89,8 @@ def _with_net_retry(fn, *args, _label="call", **kwargs):
             print(f"{_label}: transient {type(e).__name__}, retry in {sleep_s:.1f}s",
                   file=sys.stderr)
             time.sleep(sleep_s)
-    # Last attempt — propagate whatever exception occurs.
-    return fn(*args, **kwargs)
+    with _hard_timeout(120, _label):
+        return fn(*args, **kwargs)
 
 
 # --- Auth ---
