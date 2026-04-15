@@ -26,19 +26,22 @@ const EVENT_SYMBOL = {
   error: '!',
 };
 
+const RATE_WINDOW = 20;
+
 export function createProgress(total, label) {
   const startedAt = Date.now();
   const counts = { added: 0, existing: 0, refetched: 0, skipped: 0, removed: 0, error: 0 };
   let done = 0;
-  // Only events that actually hit the network count towards rate/ETA —
-  // skips are effectively free and would distort early-run estimates.
-  let networkDone = 0;
-  let networkStartedAt = null;
+  // Rolling timestamps of the last N network-hitting events. A short
+  // window keeps the rate responsive to real-time conditions and
+  // avoids anchoring ETA to a slow/unusual first post.
+  const networkTimestamps = [];
 
   function rate() {
-    if (networkDone === 0 || networkStartedAt === null) return 0;
-    const elapsedMin = (Date.now() - networkStartedAt) / 60_000;
-    return elapsedMin > 0 ? networkDone / elapsedMin : 0;
+    if (networkTimestamps.length < 2) return 0;
+    const span = networkTimestamps[networkTimestamps.length - 1] - networkTimestamps[0];
+    if (span <= 0) return 0;
+    return ((networkTimestamps.length - 1) / span) * 60_000;
   }
 
   function eta() {
@@ -71,8 +74,8 @@ export function createProgress(total, label) {
       if (event in counts) counts[event] += 1;
       done += 1;
       if (event !== 'skipped' && event !== 'removed') {
-        if (networkStartedAt === null) networkStartedAt = Date.now();
-        networkDone += 1;
+        networkTimestamps.push(Date.now());
+        if (networkTimestamps.length > RATE_WINDOW) networkTimestamps.shift();
       }
       if (isTTY) renderTTY();
       else renderLine(event, detail);
