@@ -80,10 +80,6 @@ export function createProgress(total, label) {
       if (isTTY) renderTTY();
       else renderLine(event, detail);
     },
-    note(detail) {
-      if (isTTY) return;
-      process.stdout.write(`${hhmmss()}   ${detail}\n`);
-    },
     finish() {
       const elapsed = fmtDuration((Date.now() - startedAt) / 1000);
       if (isTTY) {
