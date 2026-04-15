@@ -129,6 +129,7 @@ export async function aggregateList(list, { outputRoot, maxPostsPerRun, requestD
   }
 
   for (const sc of removed) {
+    if (stopIfLimit()) { logger.warn('maxPostsPerRun reached'); break; }
     const metaPath = join(listDir, sc, 'metadata.json');
     const previous = await readMetadata(metaPath);
     const updated = markRemoved(previous, { nowIso });
@@ -137,11 +138,14 @@ export async function aggregateList(list, { outputRoot, maxPostsPerRun, requestD
     }
     seen.delete(sc);
     progress.tick('removed', sc);
+    processed += 1;
     await persist();
   }
 
   progress.finish();
-  // Final canonical state: what Instagram actually returned.
-  await saveState(statePath, { shortcodes: current, last_run: nowIso });
+  // Use what we actually saw/processed, not IG's full list: if the run
+  // was capped by maxPostsPerRun, `current` contains shortcodes we never
+  // touched and persisting them here would wrongly mark them as seen.
+  await saveState(statePath, { shortcodes: [...seen], last_run: nowIso });
   return { added: added.length, existing: existing.length, removed: removed.length };
 }
