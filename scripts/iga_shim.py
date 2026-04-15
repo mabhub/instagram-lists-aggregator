@@ -30,7 +30,11 @@ from pathlib import Path
 import requests.exceptions as _rex
 import urllib3.exceptions as _u3ex
 from instagrapi import Client, extractors as _extractors
-from instagrapi.exceptions import MediaNotFound
+from instagrapi.exceptions import (
+    ClientLoginRequired,
+    LoginRequired,
+    MediaNotFound,
+)
 
 # --- instagrapi 2.x workaround: account without pinned broadcast channels ---
 _orig_extract_broadcast_channel = _extractors.extract_broadcast_channel
@@ -308,9 +312,21 @@ _DISPATCH = {
 
 
 # --- Serve mode ---
+_AUTH_EXPIRED = (LoginRequired, ClientLoginRequired)
+
+
 def cmd_serve(args):
-    cl = build_client(args.username)
+    # cl is held in a single-element list so the inner helper can rebind
+    # it after a successful re-login without refactoring to a class.
+    cl_holder = [build_client(args.username)]
     print("READY", file=sys.stderr, flush=True)
+
+    def _dispatch_once(req):
+        handler = _DISPATCH.get(req["cmd"])
+        if handler is None:
+            raise ValueError(f"Unknown cmd: {req['cmd']}")
+        return handler(cl_holder[0], req.get("args", {}))
+
     for line in sys.stdin:
         line = line.strip()
         if not line:
@@ -319,11 +335,15 @@ def cmd_serve(args):
         try:
             req = json.loads(line)
             req_id = req.get("id", "")
-            cmd = req["cmd"]
-            handler = _DISPATCH.get(cmd)
-            if handler is None:
-                raise ValueError(f"Unknown cmd: {cmd}")
-            data = handler(cl, req.get("args", {}))
+            try:
+                data = _dispatch_once(req)
+            except _AUTH_EXPIRED:
+                # Session expired mid-run. Try to re-login once and replay
+                # the request — keeps long-running serve sessions alive
+                # without forcing the whole run to abort.
+                print("Session expired, re-authenticating...", file=sys.stderr)
+                cl_holder[0] = build_client(args.username)
+                data = _dispatch_once(req)
             sys.stdout.write(json.dumps({"id": req_id, "ok": True, "data": data}) + "\n")
         except Exception as e:
             sys.stdout.write(json.dumps({
