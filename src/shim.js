@@ -32,6 +32,15 @@ export function startShim(username) {
     buffer: '',
   };
 
+  // Route user prompts (2FA, password) from parent stdin into child stdin.
+  // Only active until READY — after that, stdin is the JSON-lines protocol
+  // channel. Attaching this listener puts process.stdin in flowing mode and
+  // would keep the event loop alive if we forgot to detach it.
+  const forwardStdin = (d) => {
+    if (!state.ready && child.stdin.writable) child.stdin.write(d);
+  };
+  process.stdin.on('data', forwardStdin);
+
   state.readyPromise = new Promise((res, rej) => {
     const onExit = (code) => rej(new Error(`Shim exited before ready (code=${code})`));
     child.on('exit', onExit);
@@ -42,17 +51,12 @@ export function startShim(username) {
       if (s.includes('READY')) {
         child.off('exit', onExit);
         state.ready = true;
+        process.stdin.off('data', forwardStdin);
+        try { process.stdin.pause(); } catch { /* ignore */ }
         res();
       }
     });
   });
-
-  // Route user prompts (2FA, password) from parent stdin into child stdin.
-  // Only forward before READY — after that, stdin is the JSON-lines protocol channel.
-  const forwardStdin = (d) => {
-    if (!state.ready && child.stdin.writable) child.stdin.write(d);
-  };
-  process.stdin.on('data', forwardStdin);
 
   child.stdout.on('data', (d) => {
     state.buffer += d.toString();
@@ -78,6 +82,7 @@ export function startShim(username) {
 
   child.on('exit', (code) => {
     process.stdin.off('data', forwardStdin);
+    try { process.stdin.pause(); } catch { /* ignore */ }
     const err = new Error(`Shim exited unexpectedly (code=${code})`);
     for (const pending of state.pending.values()) pending.reject(err);
     state.pending.clear();
@@ -107,8 +112,14 @@ export async function shimCall(cmd, args = {}, { timeoutMs = 600_000 } = {}) {
 
 export function stopShim() {
   if (!active) return;
-  try { active.child.stdin.end(); } catch { /* ignore */ }
+  const { child } = active;
+  try { child.stdin.end(); } catch { /* ignore */ }
+  // Unref the child so it no longer keeps the event loop alive.
+  try { child.unref(); } catch { /* ignore */ }
   active = null;
+  // Release parent stdin (the forwardStdin listener keeps the TTY readable).
+  try { process.stdin.pause(); } catch { /* ignore */ }
+  try { process.stdin.unref?.(); } catch { /* ignore */ }
 }
 
 export function listCollections() { return shimCall('list-collections'); }
