@@ -1,4 +1,4 @@
-import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { readFile, writeFile, rename, mkdir } from 'node:fs/promises';
 import { dirname } from 'node:path';
 
 export async function loadState(path) {
@@ -12,7 +12,11 @@ export async function loadState(path) {
 
 export async function saveState(path, state) {
   await mkdir(dirname(path), { recursive: true });
-  await writeFile(path, JSON.stringify(state, null, 2));
+  // Write to a sibling tempfile and rename atomically — guarantees no
+  // torn write even on SIGKILL mid-flush.
+  const tmp = `${path}.tmp`;
+  await writeFile(tmp, JSON.stringify(state, null, 2));
+  await rename(tmp, path);
 }
 
 export function diffShortcodes(previous, current) {
