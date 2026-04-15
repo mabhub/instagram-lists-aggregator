@@ -106,10 +106,15 @@ def _read_password(username: str) -> str:
     if pw:
         return pw
     import getpass
+    # Emit a PROMPT marker on stderr so a Node parent knows to start
+    # forwarding stdin to us for this one line.
+    sys.stderr.write("PROMPT\n")
+    sys.stderr.flush()
     return getpass.getpass(f"Instagram password for @{username}: ")
 
 
 def _prompt_stderr(msg: str) -> str:
+    sys.stderr.write("PROMPT\n")
     sys.stderr.write(msg)
     sys.stderr.flush()
     return sys.stdin.readline().rstrip("\n")

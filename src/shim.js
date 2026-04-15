@@ -32,22 +32,38 @@ export function startShim(username) {
     buffer: '',
   };
 
-  // Route user prompts (2FA, password) from parent stdin into child stdin.
-  // Only active until READY — after that, stdin is the JSON-lines protocol
-  // channel. Attaching this listener puts process.stdin in flowing mode and
-  // would keep the event loop alive if we forgot to detach it.
+  // Stdin forwarding is opt-in per prompt, not permanent: the shim
+  // emits a "PROMPT\n" marker on stderr just before each input()/
+  // getpass() call. We forward a single line of parent stdin into
+  // the child, then detach again. This avoids capturing keystrokes
+  // the user typed during the pipx boot or other non-prompt windows.
+  let promptPending = false;
   const forwardStdin = (d) => {
-    if (!state.ready && child.stdin.writable) child.stdin.write(d);
+    if (!promptPending || !child.stdin.writable) return;
+    child.stdin.write(d);
+    // Detach as soon as we see a line terminator — one prompt, one line.
+    if (d.includes('\n')) {
+      promptPending = false;
+      try { process.stdin.pause(); } catch { /* ignore */ }
+    }
   };
-  process.stdin.on('data', forwardStdin);
 
   state.readyPromise = new Promise((res, rej) => {
     const onExit = (code) => rej(new Error(`Shim exited before ready (code=${code})`));
     child.on('exit', onExit);
 
     child.stderr.on('data', (d) => {
-      const s = filterPipxNoise(d.toString());
-      process.stderr.write(s);
+      const raw = d.toString();
+      const s = filterPipxNoise(raw);
+      if (raw.includes('PROMPT')) {
+        promptPending = true;
+        // off() before on() is idempotent if the listener isn't registered.
+        process.stdin.off('data', forwardStdin);
+        process.stdin.on('data', forwardStdin);
+        process.stdin.resume();
+      }
+      // Swallow the bare "PROMPT" line from user-visible stderr.
+      process.stderr.write(s.split('\n').filter((l) => l !== 'PROMPT').join('\n'));
       if (s.includes('READY')) {
         child.off('exit', onExit);
         state.ready = true;
